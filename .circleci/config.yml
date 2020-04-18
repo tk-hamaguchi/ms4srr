@@ -5,6 +5,38 @@ executors:
     machine: true
     working_directory: ~/workspace
 
+commands:
+  docker_login_and_push:
+    description: "DockerImageをPushする"
+    parameters:
+      registry:
+        type: string
+        default: "docker.pkg.github.com"
+      username:
+        type: string
+        default: "tk-hamaguchi"
+      password:
+        type: string
+      image_name:
+        type: string
+        default: "tk-hamaguchi/ms4srr/ms4srr"
+      image_tag:
+        type: string
+        default: "latest"
+      image_id:
+        type: string
+    steps:
+      - run:
+          name: docker login
+          command: docker login --username << parameters.username >> --password << parameters.password >> << parameters.registry >>
+
+      - run:
+          name: Push Docker image
+          command: |
+            docker tag << parameters.image_id >> << parameters.registry >>/<< parameters.image_name >>:<< parameters.image_tag >>
+            docker push << parameters.registry >>/<< parameters.image_name >>:<< parameters.image_tag >>
+
+
 jobs:
   build:
     executor:
@@ -12,17 +44,31 @@ jobs:
     steps:
       - checkout
 
+      - run: docker-compose build
+      - run: docker-compose up -d
+
       - run:
-          name: Install Docker Compose
+          name: Set ruby version to 2.7
           command: |
-            set -x
-            curl -L https://github.com/docker/compose/releases/download/1.25.3/docker-compose-`uname -s`-`uname -m` > /usr/local/bin/docker-compose
-            chmod +x /usr/local/bin/docker-compose
+            rvm install 2.7.0
+            echo . $(rvm 2.7.0 do rvm env --path) >> $BASH_ENV
 
-      - setup_remote_docker
+      - run: gem install bundler --no-document -v $(grep "BUNDLED WITH" -1 Gemfile.lock | tail -n 1)
+      - run: bundle config set deployment 'true'
+      - run: bundle install
+      
+      - run: bundle exec cucumber features
 
+      - docker_login_and_push:
+          registry:   ${DOCKER_REGISTRY_NAME}
+          username:   ${DOCKER_USER}
+          password:   ${DOCKER_PASS}
+          image_name: "tk-hamaguchi/ms4srr/ms4srr"
+          image_tag:  $(echo ${CIRCLE_SHA1} | cut -c 1-7)
+          image_id:   $(docker-compose images -q app)
 
 workflows:
   build_and_test:
     jobs:
-      - build
+      - build:
+          context: GITHUB_PACKAGE_REGISTRY
